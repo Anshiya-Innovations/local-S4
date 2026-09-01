@@ -1,0 +1,14 @@
+{
+  "name": "xyra-s4",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fake local SAP S/4HANA test system for xyra-core/xyra-web development",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/smoke.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
