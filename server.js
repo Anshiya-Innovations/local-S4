@@ -4,7 +4,7 @@ const { requireClient, requireAuth } = require('./lib/auth');
 const handlers = require('./lib/handlers');
 
 const PORT = process.env.PORT || 8000;
-const ENTITY_SET_NAMES = 'Users|CriticalTransactionLogs|GLDocuments|ChangeLogs';
+const ENTITY_SET_NAMES = 'Users|CriticalTransactionLogs|GLDocuments|ChangeLogs|ObjectParameters';
 
 // [method, path pattern, handler, protected] - protected routes need sap-client=100 + Basic auth.
 const routes = [

@@ -37,10 +37,22 @@ behavior, where the client resolves which user master to check against).
 | GET | `/sap/opu/odata/xyra/CCM_SRV/` | Basic | required | Service doc listing entity sets |
 | GET | `/sap/opu/odata/xyra/CCM_SRV/{Set}?$top=&$skip=` | Basic | required | List, paginated (default `$top=20`, cap `100`) |
 | GET | `/sap/opu/odata/xyra/CCM_SRV/{Set}(<id>)` | Basic | required | Single row, `404` if missing |
+| GET | `/sap/opu/odata/xyra/CCM_SRV/ObjectParameters?objectName=&parameterType=&parameterId=` | Basic | required | Exact-match lookup (see below) — the one entity set with filtering |
 | GET | `/sap/test/slow?delayMs=` | Basic | required | Delays response (default `10000`ms, past xyra-core's 8s fetch timeout) |
 | GET | `/sap/test/flaky` | Basic | required | ~50% random `500`, for retry-handling tests |
 
-`{Set}` is one of `Users`, `CriticalTransactionLogs`, `GLDocuments`, `ChangeLogs`.
+`{Set}` is one of `Users`, `CriticalTransactionLogs`, `GLDocuments`, `ChangeLogs`,
+`ObjectParameters`.
+
+`ObjectParameters` also rides the plain list/get routes above (`$top`/`$skip`,
+`(<id>)`) — the three query params are additive exact-match narrowing, xyra-core's
+`control_engine` uses them to look up one specific value at a time:
+```
+GET /sap/opu/odata/xyra/CCM_SRV/ObjectParameters?sap-client=100&objectName=SAP*&parameterType=GENERAL&parameterId=Password%20Changed
+→ {"@odata.context":"$metadata#ObjectParameters","@odata.count":1,"value":[{"id":1,"object_name":"SAP*","parameter_type":"GENERAL","parameter_id":"Password Changed","parameter_value":"Yes"}]}
+```
+A parameter that isn't seeded returns `value: []` with a `200` — a missing value is
+meaningful data for `EXISTS`/`NOT_EXISTS` rules, not an error.
 
 There's no dedicated "wrong client" endpoint — every protected route above already
 rejects a bad/missing `sap-client` with a `400`; just omit or mistype the query
@@ -68,6 +80,14 @@ CCM scenarios:
 - **CriticalTransactionLogs** — `SU01`/`PFCG`/`SE38`/`SM59`/`SCC4`/`MASS` executions.
 - **GLDocuments** — sample postings across two company codes.
 - **ChangeLogs** — role/user/GL/client-setting change history.
+- **ObjectParameters** — generic `(object_name, parameter_type, parameter_id) ->
+  parameter_value` store backing xyra-core's Control Rules feature (SAP*, DDIC,
+  SAPCPIC, TMSADM, WF-BATCH, SAP_WFRT, EARLYWATCH, SDMI_*, J2EE_ADMIN, J2EE_GUEST,
+  SAPJSF, ADSUSER), with a deliberate mix of compliant and non-compliant values
+  (e.g. `SAP*`'s `Roles Assigned` is seeded non-compliant) so a demo Control run
+  produces genuine pass/fail results. Independent of the `Users` table above —
+  these are service/system accounts being checked for parameter state, not the
+  interactive-login SoD fixtures.
 
 ## Pointing xyra-core at this system
 
@@ -90,13 +110,9 @@ The `endpoint` field matters: xyra-core's `connection_engine` hardcodes
 (no TLS cert setup here). `jwtToken` must stay empty, since `connection_engine`
 prefers Bearer over Basic when it's populated — this system only supports Basic.
 
-**Known gap (not fixed by this project):** xyra-core's `createSystem`/
-`updateSystem` API and the Configuration UI don't currently accept
-`endpoint`/`userId`/`passwordHash` — only landscape metadata. Until that's added,
-point an existing Systems row at this fake system manually: create it via the UI
-as usual, then patch the row directly in the tenant Postgres DB
-(`tenant_xyrademo`) to add `endpoint` and insert a `SystemCredentials` row with
-the values above.
+xyra-core's `SystemConfigService.createSystem`/`updateSystem` actions accept
+`endpoint`/`credUserId`/`credPassword` directly, so a Systems row can be pointed
+at this fake system through the normal API — no manual DB patch needed.
 
 ## Design notes
 
@@ -104,7 +120,6 @@ the values above.
   enough for this scope.
 - Single fixed client (`100`) and a single fixed credential pair — this is a
   test stub, not a multi-tenant SAP box.
-- The SAP client ID is enforced strictly here on purpose: xyra-core's real
-  connection engine never actually sends `sap-client` in its outgoing requests
-  today (it's only used as a DB lookup key). Hitting any protected endpoint here
-  without `?sap-client=100` surfaces that gap rather than silently working around it.
+- The SAP client ID is enforced strictly here on purpose, matching real SAP
+  behavior — xyra-core's `connection_engine`/`control_engine` do send
+  `?sap-client=` on every outgoing request.

@@ -37,6 +37,23 @@ async function main() {
     });
     assert.strictEqual(res.status, 400, 'wrong sap-client should be rejected even with valid auth');
 
+    res = await fetch(
+      `${base}/sap/opu/odata/xyra/CCM_SRV/ObjectParameters?sap-client=100&objectName=SAP*&parameterType=GENERAL&parameterId=${encodeURIComponent('Password Changed')}`,
+      { headers: { Authorization: authHeader } }
+    );
+    assert.strictEqual(res.status, 200);
+    const found = await res.json();
+    assert.strictEqual(found.value.length, 1, 'expected exactly one matching ObjectParameters row');
+    assert.strictEqual(found.value[0].parameter_value, 'Yes');
+
+    res = await fetch(
+      `${base}/sap/opu/odata/xyra/CCM_SRV/ObjectParameters?sap-client=100&objectName=NOBODY&parameterType=GENERAL&parameterId=Locked`,
+      { headers: { Authorization: authHeader } }
+    );
+    assert.strictEqual(res.status, 200);
+    const notFound = await res.json();
+    assert.strictEqual(notFound.value.length, 0, 'no matching row should still be a 200 with an empty value array');
+
     console.log('All xyra-s4 smoke checks passed.');
   } finally {
     server.close();
