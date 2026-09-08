@@ -13,16 +13,20 @@ async function main() {
     let res = await fetch(`${base}/`);
     assert.strictEqual(res.status, 200, 'root reachability check should be 200');
 
-    res = await fetch(`${base}/sap/ping`);
+    res = await fetch(`${base}/sap/public/ping`);
+    assert.strictEqual(res.status, 200, 'real, unauthenticated ICM ping should be 200, no client/auth needed');
+
+    const catalogUrl = `${base}/sap/opu/odata/iwfnd/catalogservice;v=2/ServiceCollection`;
+    res = await fetch(`${catalogUrl}`);
     assert.strictEqual(res.status, 400, 'missing sap-client should be 400');
     assert.strictEqual((await res.json()).error.code, 'SAP_CLIENT_INVALID');
 
-    res = await fetch(`${base}/sap/ping?sap-client=100`);
+    res = await fetch(`${catalogUrl}?sap-client=100`);
     assert.strictEqual(res.status, 401, 'missing auth should be 401');
     assert.match(res.headers.get('www-authenticate') || '', /Basic realm="xyra-s4"/);
 
-    res = await fetch(`${base}/sap/ping?sap-client=100`, { headers: { Authorization: authHeader } });
-    assert.strictEqual(res.status, 200, 'correct client + auth should be 200');
+    res = await fetch(`${catalogUrl}?sap-client=100`, { headers: { Authorization: authHeader } });
+    assert.strictEqual(res.status, 200, 'correct client + auth should be 200 from the real Gateway catalog service');
 
     res = await fetch(`${base}/sap/opu/odata/xyra/CCM_SRV/Users?sap-client=100&$top=2`, {
       headers: { Authorization: authHeader },
@@ -37,22 +41,43 @@ async function main() {
     });
     assert.strictEqual(res.status, 400, 'wrong sap-client should be rejected even with valid auth');
 
+    const objectParameterSetUrl = `${base}/sap/opu/odata/sap/ZXYRA_CCM_SRV/ObjectParameterSet`;
+
+    function odataFilter(objectName, parameterType, parameterId) {
+      const esc = (v) => v.replace(/'/g, "''");
+      return `ObjectName eq '${esc(objectName)}' and ParameterType eq '${esc(parameterType)}' and ParameterId eq '${esc(parameterId)}'`;
+    }
+
     res = await fetch(
-      `${base}/sap/opu/odata/xyra/CCM_SRV/ObjectParameters?sap-client=100&objectName=SAP*&parameterType=GENERAL&parameterId=${encodeURIComponent('Password Changed')}`,
+      `${objectParameterSetUrl}?sap-client=100&$filter=${encodeURIComponent(odataFilter('SAP*', 'GENERAL', 'Password Changed'))}&$format=json`,
       { headers: { Authorization: authHeader } }
     );
     assert.strictEqual(res.status, 200);
     const found = await res.json();
-    assert.strictEqual(found.value.length, 1, 'expected exactly one matching ObjectParameters row');
-    assert.strictEqual(found.value[0].parameter_value, 'Yes');
+    assert.strictEqual(found.d.results.length, 1, 'expected exactly one matching row in the real d.results envelope');
+    assert.strictEqual(found.d.results[0].ParameterValue, 'Yes');
 
     res = await fetch(
-      `${base}/sap/opu/odata/xyra/CCM_SRV/ObjectParameters?sap-client=100&objectName=NOBODY&parameterType=GENERAL&parameterId=Locked`,
+      `${objectParameterSetUrl}?sap-client=100&$filter=${encodeURIComponent(odataFilter('NOBODY', 'GENERAL', 'Locked'))}&$format=json`,
       { headers: { Authorization: authHeader } }
     );
     assert.strictEqual(res.status, 200);
     const notFound = await res.json();
-    assert.strictEqual(notFound.value.length, 0, 'no matching row should still be a 200 with an empty value array');
+    assert.strictEqual(notFound.d.results.length, 0, 'no matching row should still be a 200 with an empty results array, never a 404');
+
+    // A value containing a literal apostrophe round-trips correctly through
+    // OData V2's escape-by-doubling rule (client doubles it building the
+    // filter, server un-doubles it parsing the filter).
+    res = await fetch(
+      `${objectParameterSetUrl}?sap-client=100&$filter=${encodeURIComponent(odataFilter("O'Brien", 'GENERAL', 'Locked'))}&$format=json`,
+      { headers: { Authorization: authHeader } }
+    );
+    assert.strictEqual(res.status, 200, 'an embedded single quote should not break filter parsing');
+    assert.strictEqual((await res.json()).d.results.length, 0, 'no such row seeded, but the request itself must parse cleanly');
+
+    res = await fetch(`${objectParameterSetUrl}?sap-client=100&$filter=garbage&$format=json`, { headers: { Authorization: authHeader } });
+    assert.strictEqual(res.status, 400, 'an unsupported $filter shape should be a 400, not a silent misparse');
+    assert.strictEqual((await res.json()).error.code, 'UNSUPPORTED_FILTER');
 
     console.log('All xyra-s4 smoke checks passed.');
   } finally {
